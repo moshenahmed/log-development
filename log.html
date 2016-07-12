@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <title>WTS Logger</title>
+    <style>
+      html, body {
+        height: 80%;
+        margin: 0;
+        padding: 0;
+      }
+      #map {
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="trackers"></div>
+    <script>
+  	var positions = []
+  	var map
+  	var trackers = []
+
+	function shadeColor2(color, percent) {   
+	    var f=parseInt(color.slice(1),16),t=percent<0?0:255,p=percent<0?percent*-1:percent,R=f>>16,G=f>>8&0x00FF,B=f&0x0000FF;
+	    return "#"+(0x1000000+(Math.round((t-R)*p)+R)*0x10000+(Math.round((t-G)*p)+G)*0x100+(Math.round((t-B)*p)+B)).toString(16).slice(1);
+	}
+
+  	function addChart(color)
+  	{
+  		var config = {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    fill: false,
+                    data: [],
+                }]
+            },
+            options: {
+                responsive: true,
+                title:{
+                    display:false,
+                },
+                tooltips: {
+                    mode: 'label',
+                    callbacks: {
+                    }
+                },
+                hover: {
+                    mode: 'dataset'
+                },
+                scales: {
+                    xAxes: [{
+                        display: true,
+                        scaleLabel: {
+                            show: true,
+                            labelString: 'message'
+                        }
+                    }],
+                    yAxes: [{
+                        display: true,
+                        scaleLabel: {
+                            show: true,
+                            labelString: 'Value'
+                        },
+                        ticks: {
+                            suggestedMin: 0,
+                            suggestedMax: 100,
+                        }
+                    }]
+                }
+            }
+        };
+        config.data.datasets[0].borderColor = shadeColor2(color,-0.5);
+        config.data.datasets[0].pointBorderColor = shadeColor2(color,-0.5);
+        config.data.datasets[0].pointBorderWidth = 1;
+        return config;
+  	}
+
+  	function addTracker(obj)
+  	{
+  		obj.gotMsg = 0;
+  		obj.gotGps = 0;
+  		obj.TTC = 0;
+  		obj.TTFF = 0;
+  		obj.LAST = 0;
+  		obj.AVG = 0;
+  		obj.green = 0;
+  		obj.amber = 0;
+  		obj.red = 0;
+  		obj.runtime = 0;
+  		obj.positions = [];
+  		var div = document.getElementById("trackers");
+  		div.innerHTML = div.innerHTML +
+  		"<div id="+obj.tracker_id+" style=\"width:150px;float:left;background:"+obj.pin_color+"\">"+
+		"<b><div id=\""+obj.tracker_id+"name\">"+obj.name + "</div></b>" +
+		"Runtime:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"runtime\">"+0+"</div><br>"+
+		"Battery:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"battery\">"+ parseInt(obj.battery_level*100)+"</div><br>" +
+		"GREEN:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"green\">"+0+"</div><br>"+
+		"AMBER:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"amber\">"+0+"</div><br>"+
+		"RED:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"red\">"+0+"</div><br>"+
+		"TTC:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"ttc\">"+0+"</div><br>"+
+		"TTFF:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"ttff\">"+0+ "</div><br>"+
+		"LAST:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"last\">"+0+"</div><br>"+
+		"AVG:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"avg\">"+0+"</div><br>"+
+		"FW:<div style=\"float:right;margin-right:10px\" id=\""+obj.tracker_id+"fw\">"+0+"</div></div>";
+
+		trackers.push(obj);
+  	}
+
+  	function timeConverter(UNIX_timestamp)
+  	{
+	  var a = new Date(UNIX_timestamp * 1000);
+	  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+	  var year = a.getFullYear();
+	  var month = months[a.getMonth()];
+	  var date = a.getDate();
+	  var hour = a.getHours();
+	  var min = a.getMinutes();
+	  var sec = a.getSeconds();
+	  var time = date + ' ' + month + ' ' + year + ' ' + hour + ':' + min + ':' + sec ;
+	  return time;
+	}
+
+	function parseData(data)
+	{
+		var data = JSON.parse(data);
+		if(data.method == "trackers_get_for_account")
+		{
+			for (var i = data.content.length - 1; i >= 0; i--)
+			{
+				addTracker(data.content[i]);
+			}
+		}
+		else if(data.method == "trackers_get_status")
+		{
+			addPosition(data.content);
+		}
+	}
+
+	function addPosition(pos)
+	{
+		var color = "#000000"
+		for (var i = trackers.length - 1; i >= 0; i--) 
+		{
+			if(trackers[i].tracker_id == pos.tracker_id)
+			{
+				color = trackers[i].pin_color;
+
+				if(trackers[i].runtime > 5)
+				{
+					// got a gps positon
+					if(pos.gps_signal == 1)
+					{
+						trackers[i].positions.push([pos.latitude, pos.longitude, pos.last_updated, Math.round(Date.now()/ 1000)]);
+
+						trackers[i].gotGps = 1;
+
+						if(trackers[i].LAST < 2*60) // green
+						{
+							trackers[i].green++;
+							var div = document.getElementById(trackers[i].tracker_id+"green")
+							div.innerHTML = trackers[i].green;
+						}
+						else if(trackers[i].LAST < 10*60) // amber
+						{
+							trackers[i].amber++;
+							var div = document.getElementById(trackers[i].tracker_id+"amber")
+							div.innerHTML = trackers[i].amber;
+						}
+						else // red
+						{
+							trackers[i].red++;
+							var div = document.getElementById(trackers[i].tracker_id+"red")
+							div.innerHTML = trackers[i].red;
+						}
+
+						trackers[i].AVG = (trackers[i].AVG+trackers[i].LAST)/trackers[i].positions.length;
+						trackers[i].AVG = trackers[i].AVG.toFixed(2);
+						trackers[i].LAST = 0;
+						var div = document.getElementById(trackers[i].tracker_id+"avg")
+						div.innerHTML = trackers[i].AVG;
+						var div = document.getElementById(trackers[i].tracker_id+"last")
+						div.innerHTML = trackers[i].LAST;
+
+				        if (map) 
+				        {
+		        			pos.marker = addMarker(pos.latitude,pos.longitude,color);
+							positions.push(pos);
+				            map.panTo(new google.maps.LatLng(pos.latitude,pos.longitude));
+				        }
+
+					}
+
+					trackers[i].battery = pos.battery_level;
+					var div = document.getElementById(trackers[i].tracker_id+"battery")
+					div.innerHTML = parseInt(trackers[i].battery_level*100);
+					trackers[i].firmware = pos.firmware;
+					var div = document.getElementById(trackers[i].tracker_id+"fw")
+					div.innerHTML = trackers[i].firmware;
+
+					trackers[i].gotMsg = 1;					
+				}
+				else
+					return;
+
+
+			}
+		}
+	}
+
+	// Adds a marker to the map and push to the array.
+	function addMarker(lat,lon,color) {
+		color = color.substr(1);
+		var pinIcon = new google.maps.MarkerImage(
+		    "http://chart.apis.google.com/chart?chst=d_map_pin_letter&chld=%E2%80%A2|" + color,
+		    null, /* size is determined at runtime */
+		    null, /* origin is 0,0 */
+		    null, /* anchor is bottom center of the scaled image */
+		    new google.maps.Size(20, 20)
+		);
+
+	  var location = new google.maps.LatLng(lat,lon);
+	  var marker = new google.maps.Marker({
+	    position: location,
+	    map: map,
+	    icon: pinIcon
+	  });
+	  return marker;
+	}
+
+	var inited = 0;
+  	function updateTrackers()
+  	{
+  		for (var i = trackers.length - 1; i >= 0; i--) 
+  		{
+  			if(trackers[i].gotMsg == 0)
+  			{
+  				trackers[i].TTC++;
+		  		var div = document.getElementById(trackers[i].tracker_id+"ttc")
+  				div.innerHTML = trackers[i].TTC;
+  			}
+  			if(trackers[i].gotGps == 0)
+  			{
+  				trackers[i].TTFF++;
+				var div = document.getElementById(trackers[i].tracker_id+"ttff")
+  				div.innerHTML = trackers[i].TTFF;
+  			}
+
+  			trackers[i].LAST++;
+			var div = document.getElementById(trackers[i].tracker_id+"last")
+			div.innerHTML = trackers[i].LAST;
+
+  			trackers[i].runtime++;
+			var div = document.getElementById(trackers[i].tracker_id+"runtime")
+			div.innerHTML = trackers[i].runtime;
+  		}
+  	}
+
+	function initMap() 
+	{
+		var startPos = new google.maps.LatLng(59.3069250793457,14.12761116027832);
+
+		if (navigator.geolocation) 
+		{
+			navigator.geolocation.getCurrentPosition(function(position) 
+			{
+				startPos.lat = position.coords.latitude;
+				startPos.lng = position.coords.longitude;
+			});
+  		}
+  		map = new google.maps.Map(document.getElementById('map'), {zoom: 18,center: startPos});
+		setInterval(updateTrackers, 1000);
+/*
+		parseData("{\"status\":200,\"id\":\"2\",\"method\":\"trackers_get_for_account\",\"content\":[{\"battery_level\":0.46000000834465027,\"date_requested\":0,\"last_updated\":1461676160,\"gps_signal\":1,\"bands\":[850,900],\"type\":\"device\",\"time_to_sleep\":300,\"battery_left\":79488,\"longitude\":14.127754211425781,\"name\":\"blue T14 2\",\"pin_color\":\"#00A5FF\",\"tracker_id\":\"353816057096333\",\"photo\":\"\",\"latitude\":59.30997085571289,\"update_frequency\":10,\"time_out\":300,\"buffering\":true,\"speed\":0.0,\"is_pending\":0,\"is_shared\":0,\"radius\":18.0,\"firmware\":\"14.12.3.38\"}]}");
+
+		setTimeout(function() {parseData("{\"status\":200,\"content\":{\"longitude\":14.127595901489258,\"latitude\":59.3100471496582,\"speed\":0.0,\"battery_level\":0.9700000286102295,\"last_updated\":1461699940,\"gps_signal\":0,\"battery_left\":167616,\"tracker_id\":\"353816057096333\",\"loc_id\":\"f7b589816c024eb98970a410c24a02e9\",\"radius\":12.0,\"firmware\":\"14.12.3.38\"},\"id\":\"1F16E9E80216231B416777161.307461f\",\"method\":\"trackers_get_status\"}");},6000);
+  		setTimeout(function() {parseData("{\"status\":200,\"content\":{\"longitude\":14.127595901489258,\"latitude\":59.3100471496582,\"speed\":0.0,\"battery_level\":0.9700000286102295,\"last_updated\":1461699940,\"gps_signal\":1,\"battery_left\":167616,\"tracker_id\":\"353816057096333\",\"loc_id\":\"f7b589816c024eb98970a410c24a02e9\",\"radius\":12.0,\"firmware\":\"14.12.3.38\"},\"id\":\"1F16E9E80216231B416777161.307461f\",\"method\":\"trackers_get_status\"}");},10000);
+ 		setTimeout(function() {parseData("{\"status\":200,\"content\":{\"longitude\":14.127595901489258,\"latitude\":59.3100571496582,\"speed\":0.0,\"battery_level\":0.9700000286102295,\"last_updated\":1461699940,\"gps_signal\":1,\"battery_left\":167616,\"tracker_id\":\"353816057096333\",\"loc_id\":\"f7b589816c024eb98970a410c24a02e9\",\"radius\":12.0,\"firmware\":\"14.12.3.38\"},\"id\":\"1F16E9E80216231B416777161.307461f\",\"method\":\"trackers_get_status\"}");},11000);
+ 		setTimeout(function() {parseData("{\"status\":200,\"content\":{\"longitude\":14.127595901489258,\"latitude\":59.310060149582,\"speed\":0.0,\"battery_level\":0.9700000286102295,\"last_updated\":1461699940,\"gps_signal\":1,\"battery_left\":167616,\"tracker_id\":\"353816057096333\",\"loc_id\":\"f7b589816c024eb98970a410c24a02e9\",\"radius\":12.0,\"firmware\":\"14.12.3.38\"},\"id\":\"1F16E9E80216231B416777161.307461f\",\"method\":\"trackers_get_status\"}");},12000);
+		parseData("{\"status\":200,\"id\":\"2\",\"method\":\"trackers_get_for_account\",\"content\":[{\"battery_level\":0.46000000834465027,\"date_requested\":0,\"last_updated\":1461676160,\"gps_signal\":1,\"bands\":[850,900],\"type\":\"device\",\"time_to_sleep\":300,\"battery_left\":79488,\"longitude\":14.127754211425781,\"name\":\"blue T14 2\",\"pin_color\":\"#AAA5FF\",\"tracker_id\":\"353816057096334\",\"photo\":\"\",\"latitude\":59.30997085571289,\"update_frequency\":10,\"time_out\":300,\"buffering\":true,\"speed\":0.0,\"is_pending\":0,\"is_shared\":0,\"radius\":18.0,\"firmware\":\"14.12.3.38\"}]}");
+
+  		parseData("{\"status\":200,\"content\":{\"longitude\":14.127595901489258,\"latitude\":59.3100471496582,\"speed\":0.0,\"battery_level\":0.9700000286102295,\"last_updated\":1461699940,\"gps_signal\":1,\"battery_left\":167616,\"tracker_id\":\"353816057096334\",\"loc_id\":\"f7b589816c024eb98970a410c24a02e9\",\"radius\":12.0,\"firmware\":\"14.12.3.38\"},\"id\":\"1F16E9E80216231B416777161.307461f\",\"method\":\"trackers_get_status\"}");
+  		parseData("{\"status\":200,\"content\":{\"longitude\":14.127595901489258,\"latitude\":59.3100471496582,\"speed\":0.0,\"battery_level\":0.9700000286102295,\"last_updated\":1461699940,\"gps_signal\":1,\"battery_left\":167616,\"tracker_id\":\"353816057096334\",\"loc_id\":\"f7b589816c024eb98970a410c24a02e9\",\"radius\":12.0,\"firmware\":\"14.12.3.38\"},\"id\":\"1F16E9E80216231B416777161.307461f\",\"method\":\"trackers_get_status\"}");
+*/
+      }
+
+
+	function upload() 
+	{
+	    // The rest of this code assumes you are not using a library.
+	    // It can be made less wordy if you use one.
+	    var form = document.createElement("form");
+	    form.setAttribute("method", "post");
+	    form.setAttribute("action", "http://83.255.70.59/upload.php");
+
+        var hiddenField = document.createElement("input");
+        hiddenField.setAttribute("type", "hidden");
+        hiddenField.setAttribute("name", "data");
+        hiddenField.setAttribute("value", JSON.stringify(trackers));
+        form.appendChild(hiddenField);
+
+	    document.body.appendChild(form);
+	    form.submit();
+	}
+
+// WEBSOCKET
+
+function logMsg(msg) {
+    var div = document.getElementById('messages');
+    messages.innerHTML = msg + '<hr/>'+messages.innerHTML;
+}
+
+// var connection=new WebSocket("wss://bt-dev-en.wtslocate.com/");
+var connection=new WebSocket("wss://backend.wtslocate.com");
+connection.onopen = function () {
+  logMsg('Websocket is now open');
+};
+connection.onclose = function(x) {
+    logMsg('closing:'+x);
+    console.log(x);
+}
+connection.onerror = function (error) {
+  logMsg('Error Logged: ' + error); //log errors
+  logMsg(error);
+};
+
+var keepalives = 0;
+
+connection.onmessage = function (e) {
+  if (e.data == "" || e.data == " ") {
+    keepalives++;
+  } else {
+
+    // alert(e.data);
+        //logMsg(e.data); //log the received message
+      	parseData(e.data);
+/*    if (e.data.indexOf('method":"trackers_get_status') == -1) {
+
+    } else if (e.data.indexOf("353816056161096") > 0) {
+        logMsg(e.data); //log the received message
+    }*/
+   }
+};
+
+if (typeof JSON == "undefined") {
+alert('you need to use a browser with embedded JSON, such as Chrome of Safari');
+}
+
+function doSendMessage() {
+    var msg = document.getElementById('command').value;
+    connection.send(msg);
+}
+function doLogin() {
+    a = {"id":"mylogin","method":"accounts_login", data:{"email_address":document.getElementById('username').value, "password":document.getElementById('password').value}}
+    connection.send(JSON.stringify(a));
+
+	setTimeout(getTrackerList, 1000);
+	setTimeout(doObserve, 2000);
+}
+
+function doLoginFromToken() {
+    connection.send('{"id":"xxx","method":"accounts_login","data":{"token":"'+loginToken+'"}}');
+}
+
+function getGeoFences() {
+    connection.send('{"id":"625558EC2AE8944A416786432.372553f","method":"geofences_get_for_account","data":{}}');
+}
+
+function getTrackerList() {
+    connection.send('{"id":"2","method":"trackers_get_for_account","data":{}}');
+}
+function getNotifications() {
+    connection.send('{"id":"507ED7AB3D1B58BA416786443.676339f","method":"notifications_get_for_account","data":{}}');
+}
+function doObserve() {
+    connection.send('{"id":"1F16E9E80216231B416777161.307461f","method":"observer_start","data":{}}');
+}
+
+function doSendCustom() {
+var v = document.getElementById('custom_message').value;
+//alert(v);
+    connection.send(v);
+}
+
+
+    </script>
+    <script async defer
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA0qN-PEct75_oQ0vEbwr_OL_8ePJ2c5GQ&callback=initMap">
+    </script>
+  </body>
+
+<div style="float:left;">
+<fieldset>
+    <legend>Send commands</legend>
+    <form>
+        <div>
+            <label>Username <input type="text" name="username" value="" id="username" /></label>
+            <label>Password <input type="password" name="password" value="" id="password" /></label>
+            <input type="submit" onclick="doLogin();return false" value="Login" />
+        </div>
+    </form>
+    <div style="display: none;">
+        <textarea id="command"></textarea>
+        <button onclick="doSendMessage();">Send</button>
+    </div>
+    <!--<button onclick="doLoginFromToken();">Login from token</button>
+    <button onclick="getGeoFences();">Fetch GeoFences</button>
+    <button onclick="getTrackerList();">Fetch trackers</button>
+    <button onclick="getNotifications();">Fetch Notifications</button>
+    <button onclick="doObserve();">Observe</button>-->
+</fieldset></div><br><br><br><br><br><br>
+<div style="float:left;" id="messages"></div>
+<button type="button" onclick="upload()">Upload</button>
+</html>
+
+ <!--
+
+{"battery_level":0.46000000834465027,"date_requested":0,"last_updated":1461676160,"gps_signal":1,"bands":[850,900],"type":"device","time_to_sleep":300,"battery_left":79488,"longitude":14.127754211425781,"name":"blue T14 2","pin_color":"#00A5FF","tracker_id":"353816057096333","photo":"","latitude":59.30997085571289,"update_frequency":10,"time_out":300,"buffering":true,"speed":0.0,"is_pending":0,"is_shared":0,"radius":18.0,"firmware":"14.12.3.38"},
+
+{"battery_level":0.20999999344348907,"date_requested":0,"last_updated":1461675243,"gps_signal":1,"bands":[850,900],"type":"device","time_to_sleep":300,"battery_left":36288,"longitude":14.115971565246582,"name":"Blue T14 3","pin_color":"#00A5FF","tracker_id":"353816057095608","photo":"","latitude":59.30455017089844,"update_frequency":10,"time_out":300,"buffering":true,"speed":0.0,"is_pending":0,"is_shared":0,"radius":12.0,"firmware":"14.12.3.38"}]}
+
+"method":"trackers_get_for_account"
+
+{"status":200,
+"content":
+{"longitude":14.12777328491211,
+"latitude":59.31000518798828,
+"speed":0.0,
+"battery_level":0.6299999952316284,
+"last_updated":1461683840,
+"gps_signal":1,
+"battery_left":108864,
+"tracker_id":"353816057092282",
+"loc_id":"f7b589816c024eb98970a410c24a02e9",
+"radius":12.0,
+"firmware":"14.12.3.38"},
+"id":"1F16E9E80216231B416777161.307461f",
+"method":"trackers_get_status"}
+...-->
